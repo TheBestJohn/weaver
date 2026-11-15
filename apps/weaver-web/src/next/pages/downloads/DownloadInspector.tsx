@@ -9,6 +9,7 @@ import {
   CANCEL_JOB_POST_PROCESSING_MUTATION,
   JOB_OUTPUT_FILES_INSPECTOR_QUERY,
   PAUSE_JOB_MUTATION,
+  REORDER_QUEUE_ITEM_MUTATION,
   RESUME_JOB_MUTATION,
   UPDATE_JOBS_MUTATION,
 } from "@/graphql/queries";
@@ -95,6 +96,7 @@ export function DownloadInspector({
   const [, resumeJob] = useMutation(RESUME_JOB_MUTATION);
   const [cancelState, cancelJob] = useMutation(CANCEL_JOB_MUTATION);
   const [, updateJobs] = useMutation(UPDATE_JOBS_MUTATION);
+  const [, reorderQueueItem] = useMutation(REORDER_QUEUE_ITEM_MUTATION);
   const [stopState, cancelPostProcessing] = useMutation(CANCEL_JOB_POST_PROCESSING_MUTATION);
   const { categories, queue } = useNextData("categories", "queue");
   // What was just picked, shown until the queue carries it back; the daemon's
@@ -284,7 +286,27 @@ export function DownloadInspector({
             icon="topOfQueue"
             className="flex-1 justify-center"
             onClick={() => {
-              void updateJobs({ ids: [job.id], priority: "HIGH" });
+              // The queue runs HIGH, then NORMAL, then LOW, and a move only
+              // reorders within a band. So the job joins the top band if it is
+              // not in it yet, then goes to the front of that band: raising its
+              // priority alone left it behind every HIGH job already queued.
+              setFailure(null);
+              void (async () => {
+                if (priority !== "HIGH") {
+                  setPending((current) => ({ ...current, priority: "HIGH" }));
+                  const raised = await updateJobs({ ids: [job.id], priority: "HIGH" });
+                  if (raised.error) {
+                    setPending(({ priority: _failed, ...rest }) => rest);
+                    setFailure(raised.error.message);
+                    return;
+                  }
+                }
+                const moved = await reorderQueueItem({ id: job.id, kind: "TOP" });
+                if (moved.error) {
+                  setFailure(moved.error.message);
+                }
+                queue.refresh();
+              })();
             }}
           >
             {t("next.inspector.topOfQueue")}
