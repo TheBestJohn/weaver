@@ -1,0 +1,115 @@
+# Fork-only: build the linux/amd64 image of this fork and push it to
+# ghcr.io/<owner>/weaver. Upstream's `ci` workflow builds both architectures
+# and runs the full release pipeline; this is the one job this fork needs to
+# run its patched build. Runs on a `fork-v*` tag or by hand.
+name: fork-image
+
+on:
+  push:
+    tags:
+      - "fork-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to push (e.g. 0.16.15-fork.1)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  NODE_VERSION: "25"
+  RUST_TOOLCHAIN: "1.97.1"
+
+jobs:
+  image-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_LC_SYS_USE_SYSTEM: "0"
+      AWS_LC_SYS_STATIC: "1"
+      AWS_LC_SYS_SMALL: "0"
+      AWS_LC_SYS_CMAKE_BUILDER: "0"
+      CFLAGS_x86_64_unknown_linux_musl: "-DNDEBUG -ffunction-sections -fdata-sections -fvisibility=hidden"
+      CXXFLAGS_x86_64_unknown_linux_musl: "-DNDEBUG -ffunction-sections -fdata-sections -fvisibility=hidden"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve image tag
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then tag="$INPUT_TAG"; else tag="${REF_NAME#fork-v}"; fi
+          case "$tag" in (*[!A-Za-z0-9_.-]*|"") echo "bad image tag: $tag" >&2; exit 1;; esac
+          echo "image=ghcr.io/${OWNER,,}/weaver:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/weaver-web/package-lock.json
+      - name: Build web app
+        working-directory: apps/weaver-web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          test -f dist/index.html
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install target and musl toolchain
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools mold nasm
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-bin: false
+          cache-on-failure: false
+          key: fork-image-linux-x86_64-portable
+      - name: Set target CPU flags
+        run: |
+          printf 'RUSTFLAGS=%s\n' "$(cargo run -p xtask --locked -- print-rustflags --ci --target "x86_64-unknown-linux-musl" --lane portable)" >> "$GITHUB_ENV"
+      - name: Build release binary
+        run: |
+          export CC_x86_64_unknown_linux_musl="musl-gcc"
+          # As upstream: jemalloc's page size is fixed at build time.
+          export JEMALLOC_SYS_WITH_LG_PAGE=12
+          entropy_headers="$(bash .github/scripts/prepare-musl-entropy.sh "$RUNNER_TEMP")"
+          export AWS_LC_SYS_CFLAGS="${CFLAGS_x86_64_unknown_linux_musl} -idirafter ${entropy_headers}"
+          mold -run cargo build -p weaver --release --locked --target x86_64-unknown-linux-musl
+      - name: Verify native libraries are statically bundled
+        run: |
+          if readelf -d target/x86_64-unknown-linux-musl/release/weaver | grep -q '(NEEDED)'; then
+            echo "release binary has dynamic native dependencies" >&2
+            exit 1
+          fi
+
+      - name: Prepare build context
+        run: |
+          mkdir -p docker-ctx/amd64
+          install -m 0755 target/x86_64-unknown-linux-musl/release/weaver docker-ctx/amd64/weaver
+          cp docker/entrypoint.sh docker-ctx/
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: docker-ctx
+          file: docker/weaver.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
