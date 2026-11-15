@@ -20,6 +20,15 @@
 // job's failed bytes stay the sum of what it lost. The job's status is not
 // touched while a round is out.
 //
+// Some posts are short before a byte is fetched: their NZB lists only part
+// of a file's articles, the article numbers skipping the ones it left out,
+// as an indexer that missed part of a posting writes it. No server is asked
+// for those articles, so no loss is ever recorded for them, and such a post
+// downloaded whole at full health and then failed its repair. The bytes it
+// leaves out are counted lost from the moment the job takes its slot, in
+// its health then and in every weighing after, and a post they already take
+// below its critical line is given up there.
+//
 // The recovery a post declares is what its NZB names: PAR2 files, PAR3
 // files and RAR recovery volumes, each by its name. A RAR recovery record
 // inside a volume is invisible here; the 85% line is what leaves room for
@@ -309,6 +318,9 @@ pub(crate) struct Probes {
     // The posts the feed gave up, in its words.
     pub(crate) dead: HashMap<JobId, String>,
     pub(crate) verdicts: HashMap<JobId, crate::jobs::feed_verdict::FeedVerdict>,
+    // The bytes each downloading post's NZB leaves out, counted when the job
+    // took its slot; a post that leaves nothing out has no entry.
+    pub(crate) unlisted: HashMap<JobId, u64>,
     // The jobs whose dead files are being abandoned now, and whether one of
     // the refusals booked since asked for the post to be weighed again.
     // Empty between passes.
@@ -328,6 +340,7 @@ impl Default for Probes {
             states: HashMap::new(),
             dead: HashMap::new(),
             verdicts: HashMap::new(),
+            unlisted: HashMap::new(),
             abandoning: HashMap::new(),
             waiting: VecDeque::new(),
             lane_rounds: HashMap::new(),
@@ -366,6 +379,7 @@ impl Probes {
     // goes, and the post's verdict, if the feed gave one, stays.
     pub(crate) fn retire(&mut self, job_id: JobId) {
         self.states.remove(&job_id);
+        self.unlisted.remove(&job_id);
         self.lane_rounds.remove(&job_id);
         self.waiting.retain(|batch| batch.job_id != job_id);
     }
@@ -464,6 +478,56 @@ pub(crate) fn declared_recovery_bytes(spec: &JobSpec) -> u64 {
         .flat_map(|file| file.segments.iter())
         .map(|segment| u64::from(segment.bytes))
         .sum()
+}
+
+// What a post's NZB leaves out of its files.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Unlisted {
+    pub(crate) articles: u64,
+    pub(crate) bytes: u64,
+    // The files missing an article, by index.
+    pub(crate) files: BTreeSet<u32>,
+}
+
+// The articles each file's NZB entry skips: its article numbers run from 1
+// to its last, and every number short of the parts listed is a part no
+// server will be asked for. Each is costed at the file's largest listed
+// part, the size every part but the last is posted at. Parts past a file's
+// last listed one cannot be seen from its numbers and are not counted. A
+// file numbered past four times the parts it lists is not counted either:
+// that is numbering the NZB did not write as a count, and a guess would
+// give up a post that might be whole. The parser keeps one part per number.
+pub(crate) fn unlisted(spec: &JobSpec) -> Unlisted {
+    let mut found = Unlisted::default();
+    for (file, index) in spec.files.iter().zip(0u32..) {
+        let listed = file.segments.len() as u64;
+        let Some(last) = file
+            .segments
+            .iter()
+            .map(|segment| segment.article_number)
+            .max()
+        else {
+            continue;
+        };
+        let last = u64::from(last);
+        if last > listed.saturating_mul(4) {
+            continue;
+        }
+        let skipped = last.saturating_sub(listed);
+        if skipped == 0 {
+            continue;
+        }
+        let part = file
+            .segments
+            .iter()
+            .map(|segment| u64::from(segment.bytes))
+            .max()
+            .unwrap_or(0);
+        found.articles += skipped;
+        found.bytes = found.bytes.saturating_add(skipped.saturating_mul(part));
+        found.files.insert(index);
+    }
+    found
 }
 
 // Where one payload file's first article stands in the sample.
@@ -745,9 +809,10 @@ impl Pipeline {
             .get(&job_id)
             .copied()
             .unwrap_or_default();
-        let total = self.post_bytes(job_id, spec);
+        let unlisted = self.unlisted_bytes(job_id);
+        let total = self.post_bytes(job_id, spec).saturating_add(unlisted);
         let lost = self.missing_bytes(job_id);
-        let failed = probe.decided(lost);
+        let failed = probe.decided(lost).saturating_add(unlisted);
         let health = health_milli(total, failed);
         let critical = Self::critical_health_milli(total, recovery);
         if !below_critical(health, critical) {
@@ -1198,6 +1263,55 @@ impl Pipeline {
         } else if !self.fail_graph_job_ruled_short(job_id) {
             self.arm_post_probe(job_id);
         }
+    }
+
+    // The bytes the post's NZB leaves out, as counted when it took its slot.
+    pub(in crate::pipeline) fn unlisted_bytes(&self, job_id: JobId) -> u64 {
+        self.post_probes.unlisted.get(&job_id).copied().unwrap_or(0)
+    }
+
+    // Weigh what the post's NZB leaves out, once, as the job takes its slot
+    // and before its first article is asked for. The bytes are kept for
+    // every weighing after. A post they already take below its critical
+    // line is given up now, its short files with it, instead of downloading
+    // whole and failing its repair. Only a post still to download is
+    // weighed: one restored past its download keeps the ending it has.
+    pub(in crate::pipeline) fn weigh_unlisted_articles(&mut self, job_id: JobId) {
+        let Some(state) = self.jobs.get(&job_id) else {
+            return;
+        };
+        if !matches!(
+            state.download_state,
+            crate::DownloadState::Queued | crate::DownloadState::Downloading
+        ) {
+            return;
+        }
+        let spec = &state.spec;
+        let found = unlisted(spec);
+        if found.bytes == 0 {
+            self.post_probes.unlisted.remove(&job_id);
+            return;
+        }
+        let total = self.post_bytes(job_id, spec).saturating_add(found.bytes);
+        let failed = self.missing_bytes(job_id).saturating_add(found.bytes);
+        let health = health_milli(total, failed);
+        let critical = Self::critical_health_milli(total, declared_recovery_bytes(spec));
+        self.post_probes.unlisted.insert(job_id, found.bytes);
+        if self.post_probes.dead.contains_key(&job_id) || !below_critical(health, critical) {
+            return;
+        }
+        let error = format!(
+            "NZB leaves out {} articles ({:.1} MiB) across {} files; health {:.1}% below critical {:.1}%",
+            found.articles,
+            found.bytes as f64 / (1024.0 * 1024.0),
+            found.files.len(),
+            f64::from(health) / 10.0,
+            f64::from(critical) / 10.0
+        );
+        let mut verdict = crate::jobs::feed_verdict::FeedVerdict::new(error.clone());
+        verdict.abandoned_files = found.files;
+        self.post_probes.verdicts.insert(job_id, verdict);
+        self.stop_feeding_post(job_id, error);
     }
 
     // The bytes of the post the servers said are gone, in this run or one

@@ -575,6 +575,9 @@ impl Pipeline {
         }
         if admitted {
             self.nzb_admitted.insert(id);
+            // A post its NZB leaves short of what recovery rebuilds is given
+            // up before a lane asks for its first article.
+            self.weigh_unlisted_articles(id);
             // A job restored without a slot queued its engine runs; release
             // them now that it holds one.
             self.resume_graph_work(id);
