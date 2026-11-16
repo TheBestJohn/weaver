@@ -88,11 +88,11 @@ fn short_listed_job_spec(name: &str, files: usize, numbers: &[u32]) -> JobSpec {
 }
 
 // An NZB that lists six parts in ten of every file, with no recovery named,
-// is past saving before a byte is fetched: it is given up as it takes its
-// slot, every short file abandoned, instead of downloading at full health
+// is past saving before a byte is fetched: it is given up as its articles
+// are built, every short file abandoned, instead of downloading at full health
 // and failing its repair.
 #[tokio::test]
-async fn a_post_its_nzb_leaves_past_recovery_is_given_up_as_it_takes_its_slot() {
+async fn a_post_its_nzb_leaves_past_recovery_is_given_up_as_its_articles_are_built() {
     let temp_dir = tempfile::tempdir().unwrap();
     let (mut pipeline, _, _) = new_direct_pipeline(&temp_dir).await;
     let job_id = JobId(41703);
@@ -143,4 +143,100 @@ async fn a_post_its_nzb_leaves_a_little_short_keeps_downloading() {
     assert!(!pipeline.post_probes.dead.contains_key(&job_id));
     assert!(!pipeline.post_probes.verdicts.contains_key(&job_id));
     assert_eq!(pipeline.unlisted_bytes(job_id), 512);
+}
+
+// Added as any NZB is, through the queue: its article lists are let go once
+// stored and read back only when it is first handed work. The weighing is
+// done then, with the lists in hand, not when the job takes its slot and
+// holds only summaries.
+#[tokio::test]
+async fn a_queued_post_its_nzb_leaves_past_recovery_is_given_up_when_first_handed_work() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut pipeline, _, _) = new_direct_pipeline(&temp_dir).await;
+    let job_id = JobId(41705);
+    let spec = short_listed_job_spec("Queued Short", 12, &[1, 2, 7, 8, 9, 10]);
+    let nzb_zstd = nzb_zstd_for(&spec);
+    pipeline
+        .add_job(
+            job_id,
+            spec,
+            std::path::PathBuf::from("queued-short.nzb"),
+            nzb_zstd,
+            crate::jobs::AddJobOptions::default(),
+        )
+        .await
+        .unwrap();
+    pipeline.apply_queue_intents().await;
+    while pipeline.restores_waiting {
+        pipeline.apply_queue_intents().await;
+    }
+    assert!(matches!(
+        pipeline.jobs[&job_id].articles,
+        crate::jobs::model::JobArticles::Queued(_)
+    ));
+    // Waiting, it holds summaries: nothing is counted, nothing given up.
+    pipeline.weigh_unlisted_articles(job_id);
+    assert!(!pipeline.post_probes.dead.contains_key(&job_id));
+
+    activate_job(&mut pipeline, job_id).await;
+
+    let reason = pipeline.post_probes.dead.get(&job_id).cloned();
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("NZB leaves out 48 articles")),
+        "{reason:?}"
+    );
+    assert_eq!(
+        pipeline
+            .post_probes
+            .verdicts
+            .get(&job_id)
+            .map(|verdict| verdict.abandoned_files.len()),
+        Some(12)
+    );
+}
+
+// A job a little short keeps what was counted while it is parked: its lists
+// let go on a pause, the bytes still weigh in its health, and are counted
+// again as its articles are built on resume.
+#[tokio::test]
+async fn a_post_a_little_short_keeps_its_count_across_a_park() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (mut pipeline, _, _) = new_direct_pipeline(&temp_dir).await;
+    let job_id = JobId(41706);
+    let mut spec = multi_file_job_spec("Queued Nearly Whole", 12, 10);
+    for (segment, number) in spec.files[0].segments.iter_mut().zip((1..=4).chain(6..=11)) {
+        segment.article_number = number;
+    }
+    let nzb_zstd = nzb_zstd_for(&spec);
+    pipeline
+        .add_job(
+            job_id,
+            spec,
+            std::path::PathBuf::from("queued-nearly-whole.nzb"),
+            nzb_zstd,
+            crate::jobs::AddJobOptions::default(),
+        )
+        .await
+        .unwrap();
+    pipeline.apply_queue_intents().await;
+    while pipeline.restores_waiting {
+        pipeline.apply_queue_intents().await;
+    }
+    activate_job(&mut pipeline, job_id).await;
+    assert!(!pipeline.post_probes.dead.contains_key(&job_id));
+    assert_eq!(pipeline.unlisted_bytes(job_id), 512);
+
+    pipeline.release_job_articles(job_id);
+    pipeline.weigh_unlisted_articles(job_id);
+    assert_eq!(
+        pipeline.unlisted_bytes(job_id),
+        512,
+        "a parked job keeps its count"
+    );
+
+    activate_job(&mut pipeline, job_id).await;
+    assert_eq!(pipeline.unlisted_bytes(job_id), 512);
+    assert!(!pipeline.post_probes.dead.contains_key(&job_id));
 }
