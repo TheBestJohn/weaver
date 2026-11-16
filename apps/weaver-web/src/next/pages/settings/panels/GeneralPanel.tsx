@@ -54,6 +54,7 @@ interface GeneralSettings {
   completeDir: string;
   cleanupAfterExtract: boolean;
   deleteFailedJobFiles: boolean;
+  innerNzbFill: InnerNzbFillMode;
   historyRetentionDays: number;
   maxRetries: number;
   propagationDelaySecs: number;
@@ -61,6 +62,15 @@ interface GeneralSettings {
   enableSrrdbLookup: boolean;
   duplicatePolicy: DuplicatePolicy;
 }
+
+/** Whether a job its NZB leaves short is filled from the NZB its post carries. */
+type InnerNzbFillMode = "ASK" | "AUTO" | "OFF";
+const INNER_NZB_FILL_MODES: InnerNzbFillMode[] = ["ASK", "AUTO", "OFF"];
+const INNER_NZB_FILL_LABEL: Record<InnerNzbFillMode, string> = {
+  ASK: "next.general.innerNzbFill.ask",
+  AUTO: "next.general.innerNzbFill.auto",
+  OFF: "next.general.innerNzbFill.off",
+};
 
 interface ArchivePasswordSettings {
   hasPasswords: boolean;
@@ -73,6 +83,7 @@ interface Form extends DuplicatePolicy {
   completeDir: string;
   cleanupAfterExtract: boolean;
   deleteFailedJobFiles: boolean;
+  innerNzbFill: InnerNzbFillMode;
   historyRetentionDays: number;
   maxRetries: number;
   propagationDelaySecs: number;
@@ -233,6 +244,7 @@ export function GeneralPanel() {
             completeDir: settings.completeDir,
             cleanupAfterExtract: settings.cleanupAfterExtract,
             deleteFailedJobFiles: settings.deleteFailedJobFiles,
+            innerNzbFill: settings.innerNzbFill ?? "ASK",
             historyRetentionDays: settings.historyRetentionDays,
             maxRetries: settings.maxRetries,
             propagationDelaySecs: settings.propagationDelaySecs,
@@ -612,6 +624,21 @@ export function GeneralPanel() {
                 kind: "toggle",
                 value: values.deleteFailedJobFiles,
                 onChange: (next) => commit("deleteFailedJobFiles", next),
+              },
+            },
+            {
+              id: "innerNzbFill",
+              label: t("next.general.innerNzbFill"),
+              help: t("next.general.innerNzbFillHelp"),
+              keywords: "nzb missing articles incomplete fill repost inner embedded",
+              control: {
+                kind: "select" as const,
+                value: values.innerNzbFill,
+                options: INNER_NZB_FILL_MODES.map((mode) => ({
+                  value: mode,
+                  label: t(INNER_NZB_FILL_LABEL[mode]),
+                })),
+                onChange: (next: string) => commit("innerNzbFill", next as InnerNzbFillMode),
               },
             },
             {

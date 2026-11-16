@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery } from "urql";
 import {
+  ANSWER_INNER_NZB_FILL_MUTATION,
   CANCEL_JOB_MUTATION,
   CANCEL_JOB_POST_PROCESSING_MUTATION,
   JOB_OUTPUT_FILES_INSPECTOR_QUERY,
@@ -96,6 +97,15 @@ export function DownloadInspector({
   const [cancelState, cancelJob] = useMutation(CANCEL_JOB_MUTATION);
   const [, updateJobs] = useMutation(UPDATE_JOBS_MUTATION);
   const [stopState, cancelPostProcessing] = useMutation(CANCEL_JOB_POST_PROCESSING_MUTATION);
+  const [answerState, answerInnerNzbFill] = useMutation(ANSWER_INNER_NZB_FILL_MUTATION);
+  const answer = (fill: boolean) => {
+    setFailure(null);
+    void answerInnerNzbFill({ id: job.id, fill }).then((result) => {
+      if (result.error) {
+        setFailure(result.error.message);
+      }
+    });
+  };
   const { categories, queue } = useNextData("categories", "queue");
   // What was just picked, shown until the queue carries it back; the daemon's
   // answer can take a refresh to arrive, and a select that snaps back to the
@@ -262,6 +272,36 @@ export function DownloadInspector({
       </div>
 
       <div className="flex flex-none flex-col gap-[10px] border-t border-wv-hairline px-5 py-[18px]">
+        {/* The job waits, paused, on whether to fill what its NZB leaves out from the NZB its post carries. */}
+        {job.innerNzbFill ? (
+          <div className="flex flex-col gap-[10px] rounded-md border border-wv-hairline p-3">
+            <div className="text-[13px] font-medium">{t("next.inspector.innerNzbFill.title")}</div>
+            <div className="text-[12px] text-wv-muted">
+              {t("next.inspector.innerNzbFill.body", {
+                filled: formatCount(job.innerNzbFill.filled),
+                skipped: formatCount(job.innerNzbFill.skipped),
+              })}
+            </div>
+            <div className="flex gap-[10px]">
+              <SecondaryButton
+                icon="resume"
+                className="flex-1 justify-center"
+                disabled={answerState.fetching}
+                onClick={() => answer(true)}
+              >
+                {t("next.inspector.innerNzbFill.fill")}
+              </SecondaryButton>
+              <DangerButton
+                icon="cancelDownload"
+                className="flex-1 justify-center"
+                disabled={answerState.fetching}
+                onClick={() => answer(false)}
+              >
+                {t("next.inspector.innerNzbFill.fail")}
+              </DangerButton>
+            </div>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-[10px]">
           <SupportReportActions
             jobId={job.id}

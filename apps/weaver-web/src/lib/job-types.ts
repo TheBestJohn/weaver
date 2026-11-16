@@ -58,6 +58,8 @@ export interface JobData {
   archivedAt?: string | number | null;
   metadata: { key: string; value: string }[];
   deleteOperation?: DeleteOperationData | null;
+  /** Set while the job waits, paused, to be filled from the NZB its post carries; queue rows only. */
+  innerNzbFill?: { filled: number; skipped: number; left: number } | null;
 }
 
 export interface GraphqlJobData extends Omit<JobData, "progress" | "phaseProgress" | "createdAt" | "completedAt" | "metadata"> {
