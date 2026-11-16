@@ -151,6 +151,7 @@ impl SettingsMutation {
         let normalized_complete_dir = normalize_settings_path_update(&input.complete_dir);
         let cleanup_after_extract = input.cleanup_after_extract;
         let delete_failed_job_files = input.delete_failed_job_files;
+        let inner_nzb_fill = input.inner_nzb_fill;
         let history_retention_days = input
             .history_retention_days
             .map(|days| {
@@ -408,6 +409,7 @@ impl SettingsMutation {
                     enable_srrdb_lookup: cfg.enable_srrdb_lookup(),
                     watch_folder: (&cfg.watch_folder).into(),
                     duplicate_policy: cfg.duplicate_policy.into(),
+                    inner_nzb_fill: Default::default(),
                 };
                 (settings, runtime_paths)
             },
@@ -438,6 +440,22 @@ impl SettingsMutation {
                 .await
                 .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         }
+
+        // Kept in the settings table alone: activations read it there.
+        let mut settings = settings;
+        if let Some(mode) = inner_nzb_fill {
+            let mode = weaver_server_core::pipeline::inner_nzb::InnerNzbFillMode::from(mode);
+            let writer = db.clone();
+            tokio::task::spawn_blocking(move || {
+                writer.set_setting(
+                    weaver_server_core::pipeline::inner_nzb::INNER_NZB_FILL_SETTING,
+                    mode.as_str(),
+                )
+            })
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))??;
+        }
+        settings.inner_nzb_fill = crate::settings::types::stored_inner_nzb_fill(db).await;
 
         Ok(settings)
     }

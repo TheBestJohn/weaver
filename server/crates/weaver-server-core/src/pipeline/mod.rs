@@ -19,6 +19,7 @@ pub mod graph;
 mod health;
 pub(crate) mod held;
 mod infrastructure_retry;
+pub mod inner_nzb;
 mod next_up;
 mod nzb_admission;
 mod orchestrator;

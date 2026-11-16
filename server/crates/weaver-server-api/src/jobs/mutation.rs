@@ -358,6 +358,40 @@ impl JobsMutation {
         handle.resume_job(JobId(id)).await?;
         Ok(true)
     }
+    /// Answer a job waiting on `innerNzbFill`, and resume it: with `fill`,
+    /// the articles its NZB leaves out are filled from the NZB its post
+    /// carries as it is next handed work; without, it is given up as a post
+    /// short past its recovery.
+    #[graphql(guard = "ControlGuard")]
+    async fn answer_inner_nzb_fill(&self, ctx: &Context<'_>, id: u64, fill: bool) -> Result<bool> {
+        use weaver_server_core::pipeline::inner_nzb::{FillState, INNER_NZB_FILL_ATTRIBUTE_KEY};
+        let handle = ctx.data::<SchedulerHandle>()?;
+        let info = handle.get_job(JobId(id))?;
+        if !matches!(FillState::of(&info.metadata), FillState::Offered { .. }) {
+            return Err(async_graphql::Error::new(
+                "the job is not waiting for an answer about its post's own NZB",
+            ));
+        }
+        let answer = if fill {
+            FillState::Approved
+        } else {
+            FillState::Declined
+        };
+        handle
+            .update_job(
+                JobId(id),
+                weaver_server_core::jobs::JobUpdate {
+                    metadata_edits: vec![(
+                        INNER_NZB_FILL_ATTRIBUTE_KEY.to_string(),
+                        answer.value(),
+                    )],
+                    ..Default::default()
+                },
+            )
+            .await?;
+        handle.resume_job(JobId(id)).await?;
+        Ok(true)
+    }
     /// Cancel and remove a job.
     #[graphql(guard = "ControlGuard")]
     async fn cancel_job(&self, ctx: &Context<'_>, id: u64) -> Result<bool> {

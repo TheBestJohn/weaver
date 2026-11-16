@@ -59,6 +59,7 @@ pub(in crate::pipeline) mod engines;
 mod full_file_names;
 mod hardware_profile;
 mod idle;
+mod inner_nzb;
 mod memory_release;
 mod next_up_ring;
 mod nzb_admission;

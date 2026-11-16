@@ -162,6 +162,9 @@ pub(crate) struct ReadArticles {
     // That staging directory, when it is not the one the job had: made by
     // this read, and the job's to lose should the job leave first.
     made_staging: Option<PathBuf>,
+    // What looking at the post's own NZB came to, for a job short past its
+    // recovery that carries one; see `inner_nzb`.
+    inner_fill: Option<crate::pipeline::inner_nzb::FillOutcome>,
 }
 
 #[cfg(test)]
@@ -417,6 +420,9 @@ impl Pipeline {
                 .queue
                 .read(|inner| inner.row(job_id).is_none_or(|row| self.job_started(row)))
         });
+        // A job that never started may look at its post's own NZB, should
+        // its lists leave out more than its recovery covers.
+        let fill_ask = self.inner_nzb_fill_ask(job_id, follow.is_some());
         // The move is out from here until its last step on disk returned,
         // and so is its hold, which a cancel meanwhile turns into a hold on
         // the job's cleanup. A folder the reply then removes is counted out
@@ -480,14 +486,27 @@ impl Pipeline {
             drop(move_out);
             drop(hold);
             let moved = moved_to.clone();
+            let runtime = tokio::runtime::Handle::current();
             let result = tokio::task::spawn_blocking(move || {
                 let seat = match moved {
                     Some(dir) => seat.moved_to(dir),
                     None => seat,
                 };
-                read_job_articles(
+                let mut read = read_job_articles(
                     &db, job_id, category, metadata, &expected, ahead, memory, seat,
-                )
+                )?;
+                if read.restored.is_none()
+                    && let Some(ask) = fill_ask
+                {
+                    read.inner_fill = crate::pipeline::inner_nzb::look(
+                        &db,
+                        job_id,
+                        ask,
+                        &mut read.lists,
+                        &runtime,
+                    );
+                }
+                Ok(read)
             })
             .await
             .unwrap_or_else(|error| Err(format!("article read worker failed: {error}")));
@@ -713,6 +732,12 @@ impl Pipeline {
         }
         match result {
             Ok(read) => {
+                if let Some(outcome) = &read.inner_fill
+                    && self.record_inner_nzb_fill(job_id, outcome)
+                {
+                    // Offered: the job waits, paused, for an answer.
+                    return;
+                }
                 if let Some(state) = self.jobs.get_mut(&job_id) {
                     for (file, list) in state.spec.files.iter_mut().zip(read.lists) {
                         file.segments = list;
@@ -1213,6 +1238,7 @@ fn read_job_articles(
         staging: None,
         volumes: Vec::new(),
         made_staging: None,
+        inner_fill: None,
     })
 }
 

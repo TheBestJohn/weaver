@@ -978,6 +978,11 @@ type GeneralSettings {
 	enableSrrdbLookup: Boolean!
 	watchFolder: WatchFolderSettings!
 	duplicatePolicy: DuplicatePolicySettings!
+	"""
+	Whether a job whose NZB leaves out more than its recovery covers is
+	filled from the NZB its post carries, when it carries one.
+	"""
+	innerNzbFill: InnerNzbFillModeGql!
 }
 
 input GeneralSettingsInput {
@@ -985,6 +990,7 @@ input GeneralSettingsInput {
 	completeDir: String
 	cleanupAfterExtract: Boolean
 	deleteFailedJobFiles: Boolean
+	innerNzbFill: InnerNzbFillModeGql
 	"""
 	Days a history entry is kept, from 0 (forever) to 36500.
 	"""
@@ -1345,6 +1351,35 @@ type HttpBindAddressStatus {
 	serving on loopback instead; the reason, verbatim, for a banner.
 	"""
 	bindFallback: String
+}
+
+"""
+Whether to fill the articles a job's NZB leaves out from the NZB its post
+carries of itself.
+"""
+enum InnerNzbFillModeGql {
+	"""
+	Offer the fill and pause the job until it is answered.
+	"""
+	ASK
+	"""
+	Fill without asking.
+	"""
+	AUTO
+	"""
+	Never look; the job is given up as before.
+	"""
+	OFF
+}
+
+"""
+What the NZB a post carries of itself would fill: of the `skipped`
+articles the job's NZB leaves out, it has `filled`, leaving `left`.
+"""
+type InnerNzbFillOffer {
+	filled: Int!
+	skipped: Int!
+	left: Int!
 }
 
 """
@@ -1996,6 +2031,13 @@ type MutationRoot {
 	Resume a paused job.
 	"""
 	resumeJob(id: Int!): Boolean!
+	"""
+	Answer a job waiting on `innerNzbFill`, and resume it: with `fill`,
+	the articles its NZB leaves out are filled from the NZB its post
+	carries as it is next handed work; without, it is given up as a post
+	short past its recovery.
+	"""
+	answerInnerNzbFill(id: Int!, fill: Boolean!): Boolean!
 	"""
 	Cancel and remove a job.
 	"""
@@ -3234,6 +3276,12 @@ type QueueItem {
 	NZB material and credentials, which remain unavailable to GraphQL.
 	"""
 	duplicateSummary: DuplicateSummaryInfo
+	"""
+	Set while the job waits, paused, for an answer to whether the
+	articles its NZB leaves out are to be filled from the NZB its post
+	carries. Answered with `answerInnerNzbFill`.
+	"""
+	innerNzbFill: InnerNzbFillOffer
 }
 
 """
