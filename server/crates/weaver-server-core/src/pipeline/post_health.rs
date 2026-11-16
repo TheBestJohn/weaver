@@ -25,8 +25,8 @@
 // as an indexer that missed part of a posting writes it. No server is asked
 // for those articles, so no loss is ever recorded for them, and such a post
 // downloaded whole at full health and then failed its repair. The bytes it
-// leaves out are counted lost from the moment the job takes its slot, in
-// its health then and in every weighing after, and a post they already take
+// leaves out are counted lost from the moment the job's articles are first
+// built, in its health then and in every weighing after, and a post they already take
 // below its critical line is given up there.
 //
 // The recovery a post declares is what its NZB names: PAR2 files, PAR3
@@ -1270,9 +1270,10 @@ impl Pipeline {
         self.post_probes.unlisted.get(&job_id).copied().unwrap_or(0)
     }
 
-    // Weigh what the post's NZB leaves out, once, as the job takes its slot
-    // and before its first article is asked for. The bytes are kept for
-    // every weighing after. A post they already take below its critical
+    // Weigh what the post's NZB leaves out as the job's articles are built,
+    // before its first article is asked for: at its first activation, and
+    // again at each one after a pause, the lists then read back. The bytes
+    // are kept for every weighing after. A post they already take below its critical
     // line is given up now, its short files with it, instead of downloading
     // whole and failing its repair. Only a post still to download is
     // weighed: one restored past its download keeps the ending it has.
@@ -1287,6 +1288,11 @@ impl Pipeline {
             return;
         }
         let spec = &state.spec;
+        // Lists not read back hold no article numbers to count: a job is
+        // weighed as its articles are built, and keeps what was counted then.
+        if spec.files.iter().all(|file| file.segments.is_empty()) {
+            return;
+        }
         let found = unlisted(spec);
         if found.bytes == 0 {
             self.post_probes.unlisted.remove(&job_id);

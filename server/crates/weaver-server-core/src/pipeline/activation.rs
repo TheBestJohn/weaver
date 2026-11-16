@@ -758,6 +758,11 @@ impl Pipeline {
                     held,
                     &read.volumes,
                 );
+                // A post its NZB leaves short of what recovery rebuilds is
+                // given up before a lane asks for its first article. Its
+                // article lists are in hand only from here: a job waiting
+                // for its turn, or holding a slot, holds summaries.
+                self.weigh_unlisted_articles(job_id);
                 self.report_job(job_id);
                 self.download_dispatch_wake = true;
             }
