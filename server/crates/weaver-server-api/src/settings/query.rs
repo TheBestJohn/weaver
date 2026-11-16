@@ -27,6 +27,10 @@ impl SettingsQuery {
     #[graphql(guard = "AdminGuard")]
     async fn settings(&self, ctx: &Context<'_>) -> Result<GeneralSettings> {
         let config = ctx.data::<SharedConfig>()?;
+        let inner_nzb_fill = crate::settings::types::stored_inner_nzb_fill(
+            ctx.data::<weaver_server_core::Database>()?,
+        )
+        .await;
         Ok(
             with_timed_config_read(config, "settings.query.settings", |cfg| GeneralSettings {
                 data_dir: cfg.data_dir.clone(),
@@ -42,6 +46,7 @@ impl SettingsQuery {
                 enable_srrdb_lookup: cfg.enable_srrdb_lookup(),
                 watch_folder: (&cfg.watch_folder).into(),
                 duplicate_policy: cfg.duplicate_policy.into(),
+                inner_nzb_fill,
             })
             .await,
         )

@@ -286,6 +286,38 @@ pub struct QueueItem {
     /// NZB material and credentials, which remain unavailable to GraphQL.
     #[serde(default)]
     pub duplicate_summary: Option<DuplicateSummaryInfo>,
+    /// Set while the job waits, paused, for an answer to whether the
+    /// articles its NZB leaves out are to be filled from the NZB its post
+    /// carries. Answered with `answerInnerNzbFill`.
+    #[serde(default)]
+    pub inner_nzb_fill: Option<InnerNzbFillOffer>,
+}
+
+/// What the NZB a post carries of itself would fill: of the `skipped`
+/// articles the job's NZB leaves out, it has `filled`, leaving `left`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct InnerNzbFillOffer {
+    pub filled: u64,
+    pub skipped: u64,
+    pub left: u64,
+}
+
+impl InnerNzbFillOffer {
+    pub fn of(metadata: &[(String, String)]) -> Option<Self> {
+        match weaver_server_core::pipeline::inner_nzb::FillState::of(metadata) {
+            weaver_server_core::pipeline::inner_nzb::FillState::Offered {
+                filled,
+                skipped,
+                left,
+            } => Some(Self {
+                filled,
+                skipped,
+                left,
+            }),
+            _ => None,
+        }
+    }
 }
 
 fn default_queue_download_state() -> QueueDownloadState {
@@ -1468,6 +1500,7 @@ fn queue_item_from_display(
         created_at: ms_to_datetime(info.created_at_epoch_ms as i64),
         attention: attention_for_live_job(info, state),
         duplicate_summary: None,
+        inner_nzb_fill: InnerNzbFillOffer::of(&info.metadata),
     }
 }
 
@@ -1520,6 +1553,7 @@ pub fn queue_item_from_submission(
         created_at: ms_to_datetime(submitted.created_at_epoch_ms as i64),
         attention: None,
         duplicate_summary: None,
+        inner_nzb_fill: None,
     }
 }
 

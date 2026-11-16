@@ -163,6 +163,54 @@ pub struct GeneralSettings {
     pub enable_srrdb_lookup: bool,
     pub watch_folder: WatchFolderSettings,
     pub duplicate_policy: DuplicatePolicySettings,
+    /// Whether a job whose NZB leaves out more than its recovery covers is
+    /// filled from the NZB its post carries, when it carries one.
+    pub inner_nzb_fill: InnerNzbFillModeGql,
+}
+
+/// Whether to fill the articles a job's NZB leaves out from the NZB its post
+/// carries of itself.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Enum)]
+pub enum InnerNzbFillModeGql {
+    /// Offer the fill and pause the job until it is answered.
+    #[default]
+    Ask,
+    /// Fill without asking.
+    Auto,
+    /// Never look; the job is given up as before.
+    Off,
+}
+
+impl From<weaver_server_core::pipeline::inner_nzb::InnerNzbFillMode> for InnerNzbFillModeGql {
+    fn from(value: weaver_server_core::pipeline::inner_nzb::InnerNzbFillMode) -> Self {
+        use weaver_server_core::pipeline::inner_nzb::InnerNzbFillMode;
+        match value {
+            InnerNzbFillMode::Ask => Self::Ask,
+            InnerNzbFillMode::Auto => Self::Auto,
+            InnerNzbFillMode::Off => Self::Off,
+        }
+    }
+}
+
+impl From<InnerNzbFillModeGql> for weaver_server_core::pipeline::inner_nzb::InnerNzbFillMode {
+    fn from(value: InnerNzbFillModeGql) -> Self {
+        match value {
+            InnerNzbFillModeGql::Ask => Self::Ask,
+            InnerNzbFillModeGql::Auto => Self::Auto,
+            InnerNzbFillModeGql::Off => Self::Off,
+        }
+    }
+}
+
+// The mode the settings hold, read off the async runtime.
+pub(crate) async fn stored_inner_nzb_fill(
+    db: &weaver_server_core::Database,
+) -> InnerNzbFillModeGql {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || weaver_server_core::pipeline::inner_nzb::stored_mode(&db))
+        .await
+        .unwrap_or_default()
+        .into()
 }
 
 #[derive(Debug, InputObject)]
@@ -171,6 +219,7 @@ pub struct GeneralSettingsInput {
     pub complete_dir: MaybeUndefined<String>,
     pub cleanup_after_extract: Option<bool>,
     pub delete_failed_job_files: Option<bool>,
+    pub inner_nzb_fill: Option<InnerNzbFillModeGql>,
     /// Days a history entry is kept, from 0 (forever) to 36500.
     pub history_retention_days: Option<i32>,
     pub max_download_speed: Option<u64>,

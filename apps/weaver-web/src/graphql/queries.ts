@@ -37,6 +37,11 @@ const FACADE_QUEUE_ITEM_FIELDS = `
       key
       value
     }
+    innerNzbFill {
+      filled
+      skipped
+      left
+    }
   }
 `;
 
@@ -73,6 +78,11 @@ const QUEUE_TABLE_ITEM_FIELDS = `
     metadata: attributes {
       key
       value
+    }
+    innerNzbFill {
+      filled
+      skipped
+      left
     }
   }
 `;
@@ -493,6 +503,7 @@ const GENERAL_SETTINGS_FIELDS = `
     completeDir
     cleanupAfterExtract
     deleteFailedJobFiles
+    innerNzbFill
     historyRetentionDays
     maxDownloadSpeed
     maxRetries
@@ -1116,6 +1127,12 @@ export const METRICS_HISTORY_QUERY = gql`
         values
       }
     }
+  }
+`;
+
+export const ANSWER_INNER_NZB_FILL_MUTATION = gql`
+  mutation AnswerInnerNzbFill($id: Int!, $fill: Boolean!) {
+    answerInnerNzbFill(id: $id, fill: $fill)
   }
 `;
 

@@ -155,6 +155,30 @@ struct StoredOutline {
 }
 
 impl Database {
+    // Replace a job's stored NZB and its outline together, in one
+    // transaction: an activation reads the NZB's lists back and checks them
+    // against what the outline says, so the two never part.
+    pub(crate) fn replace_job_nzb(
+        &self,
+        job_id: JobId,
+        nzb_zstd: Vec<u8>,
+        outline: &NzbOutline,
+    ) -> Result<(), StateError> {
+        let datastore = self.datastore();
+        let head = OutlineHead::of(self.encryption_key(), outline)?;
+        self.run_sql_blocking(async move {
+            SqlRuntime::run_in_transaction(&datastore, "replace_job_nzb", |tx| {
+                let head = head.clone();
+                let nzb_zstd = nzb_zstd.clone();
+                Box::pin(async move {
+                    super::nzb_persistence::write_active_job_nzb_tx(tx, job_id, &nzb_zstd).await?;
+                    write_outline_tx(tx, job_id, &head).await
+                })
+            })
+            .await
+        })
+    }
+
     // Write a job's outline in one transaction of its own.
     pub(crate) fn write_job_outline(
         &self,

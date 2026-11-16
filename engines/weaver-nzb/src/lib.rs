@@ -6,6 +6,7 @@ pub mod content_sniff;
 pub mod delivery_rename;
 pub mod deobfuscate;
 pub mod error;
+pub mod fill;
 pub mod parser;
 pub mod types;
 
@@ -19,6 +20,7 @@ pub use deobfuscate::{
     is_protected_media_structure,
 };
 pub use error::NzbError;
+pub use fill::{Fill, fill_from, match_name, skipped_numbers, write_nzb};
 pub use parser::{
     FileParseDiagnostics, NzbNames, ParseDiagnostics, parse_nzb, parse_nzb_names_reader,
     parse_nzb_reader, parse_nzb_reader_files, parse_nzb_with_diagnostics,

@@ -80,7 +80,7 @@ fn posted_name(file: &NzbFile) -> String {
 }
 
 impl NzbOutline {
-    #[cfg(test)]
+    // The outline of a whole NZB in hand, as storing it writes it.
     pub(crate) fn of(nzb: &Nzb) -> Self {
         let mut outline = Self::with_meta(&nzb.meta);
         outline.files = nzb.files.iter().filter_map(OutlineFile::of).collect();

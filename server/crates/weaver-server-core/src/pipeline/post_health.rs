@@ -1314,6 +1314,11 @@ impl Pipeline {
             f64::from(health) / 10.0,
             f64::from(critical) / 10.0
         );
+        // What became of the post's own NZB, when it carried one.
+        let error = match crate::pipeline::inner_nzb::FillState::of(&spec.metadata).error_note() {
+            Some(note) => format!("{error}; {note}"),
+            None => error,
+        };
         let mut verdict = crate::jobs::feed_verdict::FeedVerdict::new(error.clone());
         verdict.abandoned_files = found.files;
         self.post_probes.verdicts.insert(job_id, verdict);
