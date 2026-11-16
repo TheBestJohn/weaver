@@ -1220,6 +1220,12 @@ export const UPDATE_JOBS_MUTATION = gql`
   }
 `;
 
+export const REORDER_QUEUE_ITEM_MUTATION = gql`
+  mutation ReorderQueueItem($id: Int!, $kind: QueueMoveKind!, $offset: Int) {
+    reorderQueueItem(id: $id, kind: $kind, offset: $offset)
+  }
+`;
+
 export const EVENTS_SUBSCRIPTION = gql`
   subscription Events {
     events {
