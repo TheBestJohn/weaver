@@ -194,3 +194,79 @@ fn every_old_numbered_volume_is_a_piece_in_a_place_of_its_own() {
     assert_eq!(names_a_place("map.t01"), None);
     assert_eq!(names_a_place("a.s01"), names_a_place("A.S01"));
 }
+
+// A file whose NZB entry lists parts 1, 2, 4 and 5 left part 3 out.
+fn file_listing(numbers: &[u32], bytes: u32) -> FileSpec {
+    FileSpec {
+        filename: "amber-lattice.part01.rar".to_string(),
+        role: FileRole::Standalone,
+        groups: vec!["alt.binaries.test".to_string()],
+        posted_at_epoch: None,
+        segments: numbers
+            .iter()
+            .zip(0u32..)
+            .map(
+                |(&article_number, ordinal)| crate::jobs::model::SegmentSpec {
+                    ordinal,
+                    article_number,
+                    bytes,
+                    message_ids: crate::jobs::MessageIds::new(vec![format!(
+                        "amber-{article_number}@example.com"
+                    )]),
+                },
+            )
+            .collect(),
+    }
+}
+
+fn spec_of(files: Vec<FileSpec>) -> JobSpec {
+    let total_bytes = files
+        .iter()
+        .flat_map(|file| file.segments.iter())
+        .map(|segment| u64::from(segment.bytes))
+        .sum();
+    JobSpec {
+        name: "Amber Lattice".to_string(),
+        password: None,
+        files,
+        total_bytes,
+        category: None,
+        metadata: vec![],
+    }
+}
+
+#[test]
+fn a_skipped_article_number_is_a_part_the_nzb_left_out() {
+    let spec = spec_of(vec![
+        file_listing(&[1, 2, 3, 4, 5], 700),
+        file_listing(&[1, 2, 4, 5], 700),
+    ]);
+    let found = unlisted(&spec);
+    assert_eq!(found.articles, 1);
+    assert_eq!(found.bytes, 700);
+    assert_eq!(found.files, BTreeSet::from([1]));
+}
+
+#[test]
+fn each_left_out_part_costs_the_files_largest_listed_part() {
+    // The last part is the short one; a gap costs a full part.
+    let mut spec = spec_of(vec![file_listing(&[1, 4, 5], 700)]);
+    spec.files[0].segments[2].bytes = 120;
+    let found = unlisted(&spec);
+    assert_eq!(found.articles, 2);
+    assert_eq!(found.bytes, 1_400);
+}
+
+#[test]
+fn numbering_that_is_not_a_count_and_a_missing_tail_are_not_counted() {
+    // Numbered far past what it lists: not counted rather than guessed at.
+    let far = file_listing(&[1, 2, 900], 700);
+    // Parts after the last listed one leave no gap to see.
+    let tail = file_listing(&[1, 2, 3], 700);
+    // A zero-based NZB that lists every part.
+    let zero_based = file_listing(&[0, 1, 2, 3], 700);
+    assert_eq!(
+        unlisted(&spec_of(vec![far, tail, zero_based])),
+        Unlisted::default()
+    );
+}
